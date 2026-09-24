@@ -1164,4 +1164,377 @@ mod tests {
         
         assert!(res.is_err(), "Bob should not be able to vote with tokens received after snapshot");
     }
+
+    // ── Expanded authorization negative tests (#611) ─────────────────
+
+    // --- Missing authorization ---
+
+    /// create_proposal without mock_auths must fail.
+    #[test]
+    fn create_proposal_without_auth_is_rejected() {
+        let (env, _contract_id, _admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+
+        let result = client.try_create_proposal(
+            &proposer,
+            &1u32,
+            &s(&env, "title"),
+            &s(&env, "desc"),
+        );
+        assert!(result.is_err(), "create_proposal must require auth");
+    }
+
+    /// vote without mock_auths must fail.
+    #[test]
+    fn vote_without_auth_is_rejected() {
+        let (env, contract_id, admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let proposal_id = create_proposal_with_auth(&env, &contract_id, &client, &proposer);
+        let proposal = client.get_proposal(&proposal_id).unwrap();
+        cache_balance_with_auth(&env, &contract_id, &client, &admin, proposal.snapshot_ledger, &voter, 200);
+
+        let result = client.try_vote(&voter, &proposal_id, &VoteChoice::Approve);
+        assert!(result.is_err(), "vote must require auth");
+    }
+
+    /// cache_token_balance without mock_auths must fail.
+    #[test]
+    fn cache_token_balance_without_auth_is_rejected() {
+        let (env, _contract_id, _admin, _pulse, client) = setup();
+        let voter = Address::generate(&env);
+        let result = client.try_cache_token_balance(
+            &Address::generate(&env),
+            &90u32,
+            &voter,
+            &100i128,
+        );
+        assert!(result.is_err(), "cache_token_balance must require auth");
+    }
+
+    /// update_config without mock_auths must fail.
+    #[test]
+    fn update_config_without_auth_is_rejected() {
+        let (env, _contract_id, _admin, pulse, client) = setup();
+        let config = GovernanceConfig {
+            quorum_threshold: 10,
+            consensus_threshold: 5_000,
+            voting_period_ledgers: 20,
+            pulse_token_address: pulse,
+        };
+        let rando = Address::generate(&env);
+        let result = client.try_update_config(&rando, &config);
+        assert!(result.is_err(), "update_config must require auth");
+    }
+
+    // --- Wrong signer ---
+
+    /// Non-admin cannot cache_token_balance even with their own valid auth.
+    #[test]
+    fn cache_token_balance_wrong_signer_is_rejected() {
+        let (env, contract_id, _admin, _pulse, client) = setup();
+        let attacker = Address::generate(&env);
+        let voter = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &attacker,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "cache_token_balance",
+                    args: (attacker.clone(), 90u32, voter.clone(), 100i128).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_cache_token_balance(&attacker, &90, &voter, &100);
+        assert!(result.is_err(), "non-admin must not cache balances");
+    }
+
+    /// A voter with zero balance must be rejected.
+    #[test]
+    fn vote_with_zero_balance_is_rejected() {
+        let (env, contract_id, admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let proposal_id = create_proposal_with_auth(&env, &contract_id, &client, &proposer);
+        let proposal = client.get_proposal(&proposal_id).unwrap();
+
+        // Cache zero balance
+        cache_balance_with_auth(
+            &env,
+            &contract_id,
+            &client,
+            &admin,
+            proposal.snapshot_ledger,
+            &voter,
+            0,
+        );
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &voter,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "vote",
+                    args: (voter.clone(), proposal_id, VoteChoice::Approve).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_vote(&voter, &proposal_id, &VoteChoice::Approve);
+        assert!(result.is_err(), "zero-balance voter must be rejected");
+    }
+
+    // --- Dependency / state failure ---
+
+    /// Voting on a non-existent proposal must fail.
+    #[test]
+    fn vote_on_nonexistent_proposal_is_rejected() {
+        let (env, contract_id, _admin, _pulse, client) = setup();
+        let voter = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &voter,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "vote",
+                    args: (voter.clone(), 9999u32, VoteChoice::Approve).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_vote(&voter, &9999u32, &VoteChoice::Approve);
+        assert!(result.is_err(), "vote on nonexistent proposal must fail");
+    }
+
+    /// Voting after the end_ledger must fail.
+    #[test]
+    fn vote_after_voting_period_is_rejected() {
+        let (env, contract_id, admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+        let proposal_id = create_proposal_with_auth(&env, &contract_id, &client, &proposer);
+        let proposal = client.get_proposal(&proposal_id).unwrap();
+        cache_balance_with_auth(
+            &env,
+            &contract_id,
+            &client,
+            &admin,
+            proposal.snapshot_ledger,
+            &voter,
+            50,
+        );
+
+        // Advance ledger past end_ledger
+        env.ledger().with_mut(|li| {
+            li.sequence_number = proposal.end_ledger + 1;
+        });
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &voter,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "vote",
+                    args: (voter.clone(), proposal_id, VoteChoice::Approve).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_vote(&voter, &proposal_id, &VoteChoice::Approve);
+        assert!(result.is_err(), "vote after period end must be rejected");
+    }
+
+    /// finalize_proposal before voting period ends must fail.
+    #[test]
+    fn finalize_before_period_ends_is_rejected() {
+        let (env, contract_id, _admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+        let proposal_id = create_proposal_with_auth(&env, &contract_id, &client, &proposer);
+
+        // Ledger is still in the middle of the voting period
+        let result = client.try_finalize_proposal(&proposal_id);
+        assert!(result.is_err(), "finalize before end must be rejected");
+    }
+
+    /// execute_proposal on a non-approved proposal must fail.
+    #[test]
+    fn execute_non_approved_proposal_is_rejected() {
+        let (env, contract_id, _admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+        let proposal_id = create_proposal_with_auth(&env, &contract_id, &client, &proposer);
+
+        // Active → not approved → execute must fail
+        let result = client.try_execute_proposal(&proposal_id);
+        assert!(result.is_err(), "execute on non-approved proposal must fail");
+    }
+
+    /// Proposal creation with empty title must fail.
+    #[test]
+    fn create_proposal_with_empty_title_is_rejected() {
+        let (env, contract_id, _admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &proposer,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "create_proposal",
+                    args: (proposer.clone(), 1u32, s(&env, ""), s(&env, "desc")).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_create_proposal(&proposer, &1u32, &s(&env, ""), &s(&env, "desc"));
+        assert!(result.is_err(), "empty title must be rejected");
+    }
+
+    /// Proposal creation with empty description must fail.
+    #[test]
+    fn create_proposal_with_empty_description_is_rejected() {
+        let (env, contract_id, _admin, _pulse, client) = setup();
+        let proposer = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &proposer,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "create_proposal",
+                    args: (proposer.clone(), 1u32, s(&env, "title"), s(&env, "")).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_create_proposal(&proposer, &1u32, &s(&env, "title"), &s(&env, ""));
+        assert!(result.is_err(), "empty description must be rejected");
+    }
+
+    /// cache_token_balance with a negative balance must fail.
+    #[test]
+    fn cache_token_balance_negative_is_rejected() {
+        let (env, contract_id, admin, _pulse, client) = setup();
+        let voter = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &admin,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "cache_token_balance",
+                    args: (admin.clone(), 90u32, voter.clone(), -1i128).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_cache_token_balance(&admin, &90u32, &voter, &(-1i128));
+        assert!(result.is_err(), "negative balance cache must be rejected");
+    }
+
+    /// Governance initialization with quorum_threshold = 0 must fail.
+    #[test]
+    fn initialize_with_zero_quorum_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, TalosGovernance);
+        let client = TalosGovernanceClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let pulse = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &admin,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "initialize",
+                    args: (admin.clone(), pulse.clone(), 0_i128, 5_000_i128, 20_u32).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_initialize(&admin, &pulse, &0_i128, &5_000_i128, &20_u32);
+        assert!(result.is_err(), "zero quorum must be rejected");
+    }
+
+    /// Governance initialization with consensus_threshold = 0 must fail.
+    #[test]
+    fn initialize_with_zero_consensus_threshold_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, TalosGovernance);
+        let client = TalosGovernanceClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let pulse = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &admin,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "initialize",
+                    args: (admin.clone(), pulse.clone(), 100_i128, 0_i128, 20_u32).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_initialize(&admin, &pulse, &100_i128, &0_i128, &20_u32);
+        assert!(result.is_err(), "zero consensus threshold must be rejected");
+    }
+
+    /// Governance initialization with consensus_threshold > 10_000 must fail.
+    #[test]
+    fn initialize_with_consensus_threshold_above_max_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, TalosGovernance);
+        let client = TalosGovernanceClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let pulse = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &admin,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "initialize",
+                    args: (admin.clone(), pulse.clone(), 100_i128, 10_001_i128, 20_u32).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_initialize(&admin, &pulse, &100_i128, &10_001_i128, &20_u32);
+        assert!(result.is_err(), "consensus_threshold > 10_000 must be rejected");
+    }
+
+    /// Governance initialization with voting_period_ledgers = 0 must fail.
+    #[test]
+    fn initialize_with_zero_voting_period_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, TalosGovernance);
+        let client = TalosGovernanceClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let pulse = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &admin,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "initialize",
+                    args: (admin.clone(), pulse.clone(), 100_i128, 5_000_i128, 0_u32).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_initialize(&admin, &pulse, &100_i128, &5_000_i128, &0_u32);
+        assert!(result.is_err(), "zero voting period must be rejected");
+    }
+
+    /// Double-initialization of governance must be rejected.
+    #[test]
+    fn double_initialize_is_rejected() {
+        let (env, contract_id, admin, pulse, client) = setup();
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &admin,
+                invoke: &MockAuthInvoke {
+                    contract: &contract_id,
+                    fn_name: "initialize",
+                    args: (admin.clone(), pulse.clone(), 100_i128, 5_000_i128, 20_u32).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_initialize(&admin, &pulse, &100_i128, &5_000_i128, &20_u32);
+        assert!(result.is_err(), "double initialization must be rejected");
+    }
 }
