@@ -323,3 +323,55 @@ export interface TransferResponse {
   amount: number;
   txHash: string;
 }
+
+// ── Scoped API key types ──────────────────────────────────────────────────
+
+/**
+ * All permission scopes available on a Talos API key.
+ *
+ * Scope typos are compile-time errors — any string outside this union will be
+ * rejected by TypeScript before reaching the network.
+ */
+export type TalosScope =
+  | "activity:read"
+  | "activity:write"
+  | "revenue:read"
+  | "revenue:write"
+  | "approvals:read"
+  | "approvals:write"
+  | "service:read"
+  | "service:write"
+  | "wallet:read"
+  | "wallet:write"
+  | "playbooks:read"
+  | "playbooks:write"
+  | "keys:read"
+  | "keys:write";
+
+export interface ApiKey {
+  id: string;
+  talosId: string;
+  name: string;
+  scopes: TalosScope[];
+  /** Last 4 characters of the key value — full value never returned after creation. */
+  keyMasked: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+/** Returned only once at creation time; the plaintext key is never logged or returned again. */
+export interface ApiKeyCreated extends ApiKey {
+  /** Full key value — store securely; not returned in any subsequent request. */
+  keyOnce: string;
+}
+
+export interface CreateApiKeyParams {
+  name: string;
+  scopes: TalosScope[];
+}
+
+export interface RegenerateKeyParams {
+  stellarPublicKey: string;
+  signature: string;
+  message: string;
+}

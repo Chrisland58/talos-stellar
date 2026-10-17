@@ -27,6 +27,10 @@ import type {
   CursorRequestOptions,
   ActivityPage,
   ActivityPageOptions,
+  ApiKey,
+  ApiKeyCreated,
+  CreateApiKeyParams,
+  RegenerateKeyParams,
 } from "./types.js";
 
 export interface RetryPolicyOptions {
@@ -406,6 +410,69 @@ export class TalosClient {
 
   async createPlaybook(params: CreatePlaybookParams): Promise<Playbook> {
     return this.request("/api/playbooks", {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+
+  // ── API Key Management ─────────────────────────────────────────────────
+
+  /**
+   * List all scoped API keys for a Talos.
+   *
+   * Key material is never returned; only masked identifiers and metadata.
+   */
+  async listApiKeys(talosId: string): Promise<ApiKey[]> {
+    return this.request(`/api/talos/${talosId}/api-keys`);
+  }
+
+  /**
+   * Create a new scoped API key.
+   *
+   * The full key value is returned only once in `ApiKeyCreated.keyOnce`.
+   * It is never logged or included in any subsequent response.
+   *
+   * @example
+   * const created = await client.createApiKey("talos_abc", {
+   *   name: "CI deploy key",
+   *   scopes: ["activity:write", "revenue:read"],
+   * });
+   * // Store created.keyOnce securely — it will not be shown again.
+   */
+  async createApiKey(talosId: string, params: CreateApiKeyParams): Promise<ApiKeyCreated> {
+    return this.request(`/api/talos/${talosId}/api-keys`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Revoke a scoped API key by its ID.
+   *
+   * The key is immediately invalidated; any in-flight requests using it will
+   * receive a 401 response.
+   */
+  async revokeApiKey(talosId: string, keyId: string): Promise<void> {
+    await this.request(`/api/talos/${talosId}/api-keys/${keyId}`, {
+      method: "DELETE",
+    });
+  }
+
+  /**
+   * Regenerate the primary API key for a Talos.
+   *
+   * Requires a Stellar ED25519 signature proving wallet ownership so that only
+   * the operator can cycle the key. The old key is invalidated immediately.
+   *
+   * @example
+   * const { apiKey } = await client.regenerateKey("talos_abc", {
+   *   stellarPublicKey: "GABC…",
+   *   signature: base64Signature,
+   *   message: `Regenerate API key for talos_abc at ${Date.now()}`,
+   * });
+   */
+  async regenerateKey(talosId: string, params: RegenerateKeyParams): Promise<{ apiKey: string }> {
+    return this.request(`/api/talos/${talosId}/regenerate-key`, {
       method: "POST",
       body: JSON.stringify(params),
     });
