@@ -1,3 +1,4 @@
+import { withRequestId } from "@/lib/with-request-id";
 import { NextRequest } from "next/server";
 import { db } from "@/db";
 import { tlsTalos } from "@/db/schema";
@@ -5,8 +6,8 @@ import { eq } from "drizzle-orm";
 import { isNameAvailableOnChain } from "@/lib/soroban";
 
 // GET /api/talos/check-name?name=foo
-export async function GET(request: NextRequest) {
-  const name = request.nextUrl.searchParams.get("name")?.toLowerCase().trim();
+async function _GET(request: NextRequest) {
+  const name = new URL(request.url).searchParams.get("name")?.toLowerCase().trim();
 
   if (!name || name.length < 3) {
     return Response.json({ available: false, reason: "Name must be at least 3 characters" });
@@ -39,3 +40,5 @@ export async function GET(request: NextRequest) {
 
   return Response.json({ available: true });
 }
+
+export const GET = withRequestId(_GET);
