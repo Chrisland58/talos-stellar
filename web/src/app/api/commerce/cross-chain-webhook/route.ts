@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { withRequestId } from "@/lib/with-request-id";
 import { NextRequest } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -6,6 +7,7 @@ import { withTransactionRetry } from "@/db/db-retry";
 import { tlsCommerceJobs, tlsCommerceServices, tlsRevenues, tlsTalos } from "@/db/schema";
 import { fulfillInstant } from "@/lib/fulfillment";
 import { crossChainWebhookSchema } from "@/lib/schemas";
+import { ingestJobToLedger } from "@/lib/reputation-ledger";
 
 function normalizeChain(chain: string) {
   return chain.trim().toLowerCase();
@@ -55,7 +57,7 @@ function validationErrorResponse(issues: string[]) {
 // Authentication:
 //   - Requires HMAC SHA-256 signature in X-Signature
 //   - Signature is computed over the raw request body with CROSS_CHAIN_WEBHOOK_SECRET
-export async function POST(request: NextRequest) {
+async function _POST(request: NextRequest) {
   try {
     const webhookSecret = process.env.CROSS_CHAIN_WEBHOOK_SECRET;
     if (!webhookSecret) {
@@ -297,6 +299,9 @@ export async function POST(request: NextRequest) {
           });
         }
 
+        // Record terminal status to the reputation input ledger idempotently
+        await ingestJobToLedger(savedJob.id, tx);
+
         return [savedJob];
       },
       { category: "JOB" }
@@ -332,3 +337,5 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+export const POST = withRequestId(_POST);
