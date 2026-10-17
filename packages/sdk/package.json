@@ -17,7 +17,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:examples": "vitest run tests/examples.smoke.test.ts",
+    "typecheck:examples": "tsc --project tsconfig.examples.json"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^14.2.0"
