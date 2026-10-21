@@ -1,3 +1,56 @@
+// ── Scoped API key types ─────────────────────────────────────────
+
+/**
+ * All permission scopes that a scoped API key may hold.
+ * These mirror the server-side scope definitions exactly, so any typo
+ * in a scope value is caught at compile time.
+ */
+export type TalosScope =
+  | "read:activity"
+  | "write:activity"
+  | "read:revenue"
+  | "write:revenue"
+  | "read:service"
+  | "write:service"
+  | "read:wallet"
+  | "write:approvals";
+
+export interface CreateApiKeyParams {
+  /** Human-readable label for this key (e.g. "CI reporter"). */
+  name: string;
+  /** One or more scopes this key is authorised to use. */
+  scopes: TalosScope[];
+}
+
+export interface ApiKey {
+  id: string;
+  talosId: string;
+  name: string;
+  scopes: TalosScope[];
+  /** Only present in the create response; never returned afterwards. */
+  keyOnce?: string;
+  /** Masked representation shown in subsequent list/get responses. */
+  keyMasked?: string;
+  createdAt: string;
+  lastUsedAt?: string | null;
+}
+
+export interface RegenerateKeyParams {
+  /** Stellar ED25519 public key that owns the TALOS. */
+  stellarPublicKey: string;
+  /** Base64-encoded ED25519 signature over `message`. */
+  signature: string;
+  /**
+   * The signed message — must include the TALOS ID to prevent replay attacks
+   * across different agents (e.g. `"regenerate-key:<talosId>"`).
+   */
+  message: string;
+}
+
+export interface RegenerateKeyResponse {
+  apiKey: string;
+}
+
 // ── Request types ────────────────────────────────────────────────
 
 export interface CreateTalosParams {

@@ -381,3 +381,47 @@ export const tlsApiAuditLogs = pgTable(
     index("tls_api_audit_logs_talosId_createdAt_idx").on(t.talosId, t.createdAt),
   ],
 );
+
+// ─── Scoped API Keys ──────────────────────────────────────────────
+
+/**
+ * Least-privilege API keys — each key carries a set of scopes that restrict
+ * which endpoints it can reach.  The raw key value is returned only once at
+ * creation time; afterwards only the masked form (tsk_XXXX****XXXX) is stored.
+ *
+ * Scopes (kept in sync with TalosScope in the SDK):
+ *   read:activity  | write:activity
+ *   read:revenue   | write:revenue
+ *   read:service   | write:service
+ *   read:wallet
+ *   write:approvals
+ */
+export const tlsScopedApiKeys = pgTable(
+  "tls_scoped_api_keys",
+  {
+    id: text("id").primaryKey().$defaultFn(() => createId()),
+    talosId: text("talosId").notNull().references(() => tlsTalos.id, { onDelete: "cascade" }),
+
+    /** Human-readable label chosen by the integrator (e.g. "CI reporter"). */
+    name: text("name").notNull(),
+
+    /**
+     * The raw key value (tsk_<48 hex chars>).
+     * In a production hardening pass this should be replaced with an argon2 hash.
+     */
+    keyHash: text("keyHash").notNull().unique(),
+
+    /** Masked form returned in list/get responses — never exposes the secret. */
+    keyMasked: text("keyMasked").notNull(),
+
+    /** Array of scope strings this key is authorised for. */
+    scopes: text("scopes").array().notNull().default([]),
+
+    lastUsedAt: timestamp("lastUsedAt", { mode: "date", precision: 3 }),
+
+    createdAt: timestamp("createdAt", { mode: "date", precision: 3 }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("tls_scoped_api_keys_talosId_idx").on(t.talosId),
+  ],
+);

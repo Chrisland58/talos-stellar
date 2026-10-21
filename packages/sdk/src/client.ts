@@ -27,6 +27,10 @@ import type {
   CursorRequestOptions,
   ActivityPage,
   ActivityPageOptions,
+  ApiKey,
+  CreateApiKeyParams,
+  RegenerateKeyParams,
+  RegenerateKeyResponse,
 } from "./types.js";
 
 export interface RetryPolicyOptions {
@@ -386,6 +390,58 @@ export class TalosClient {
 
   async getJobResult(jobId: string): Promise<CommerceJob> {
     return this.request(`/api/jobs/${jobId}/result`);
+  }
+
+  // ── Scoped API Key Management ──────────────────────────────────
+
+  /**
+   * List all scoped API keys for a TALOS.
+   * Key material is never returned — only metadata (id, name, scopes, keyMasked).
+   * Requires Bearer authentication.
+   */
+  async listApiKeys(talosId: string): Promise<ApiKey[]> {
+    return this.request(`/api/talos/${talosId}/api-keys`);
+  }
+
+  /**
+   * Create a new scoped API key for a TALOS.
+   * The full key value is returned **once** in `keyOnce` and never again.
+   * Store it securely immediately — it cannot be retrieved afterwards.
+   * Requires Bearer authentication.
+   */
+  async createApiKey(talosId: string, params: CreateApiKeyParams): Promise<ApiKey> {
+    return this.request(`/api/talos/${talosId}/api-keys`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Revoke (delete) a scoped API key.
+   * Once revoked the key is immediately invalidated.
+   * Requires Bearer authentication.
+   */
+  async revokeApiKey(talosId: string, keyId: string): Promise<void> {
+    await this.request(`/api/talos/${talosId}/api-keys/${keyId}`, {
+      method: "DELETE",
+    });
+  }
+
+  /**
+   * Regenerate the primary API key for a TALOS.
+   * The old key is invalidated immediately.
+   * Requires Stellar ED25519 signature proof of wallet ownership
+   * (NOT the current API key) to prevent credential-stuffing escalation.
+   * The new key is returned in `apiKey` — store it securely.
+   */
+  async regenerateKey(
+    talosId: string,
+    params: RegenerateKeyParams,
+  ): Promise<RegenerateKeyResponse> {
+    return this.request(`/api/talos/${talosId}/regenerate-key`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
   }
 
   // ── Leaderboard ────────────────────────────────────────────
